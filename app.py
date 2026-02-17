@@ -73,6 +73,12 @@ if uploaded_file:
         st.subheader("📂 Dataset Overview")
         st.write("Shape:", df.shape)
         st.dataframe(df.head())
+
+        # Show missing value warning if any
+        missing = df.isnull().sum().sum()
+        if missing > 0:
+            st.warning(f"⚠️ Dataset contains {missing} missing value(s). They will be handled automatically.")
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ================= TARGET SELECTION =================
@@ -82,15 +88,33 @@ if uploaded_file:
     X = df.drop(columns=[target])
     y = df[target]
 
-    # Encode categorical features
+    # --- FIX 1: Encode categorical features ---
     for col in X.select_dtypes(include="object").columns:
         X[col] = LabelEncoder().fit_transform(X[col].astype(str))
 
+    # --- FIX 2: Fill missing values BEFORE scaling ---
+    # Numeric columns: fill with median
+    for col in X.select_dtypes(include=[np.number]).columns:
+        X[col] = X[col].fillna(X[col].median())
+
+    # --- FIX 3: Replace any remaining inf/-inf with NaN then fill ---
+    X = X.replace([np.inf, -np.inf], np.nan)
+    X = X.fillna(X.median(numeric_only=True))
+
+    # --- Handle target column ---
     if y.dtype == "object":
         task_type = "classification"
         y = LabelEncoder().fit_transform(y.astype(str))
     else:
-        task_type = "regression"
+        # Fill missing target values with median
+        y = pd.to_numeric(y, errors="coerce")
+        y = y.fillna(y.median())
+
+        unique_vals = y.nunique()
+        task_type = "classification" if unique_vals <= 10 else "regression"
+
+    # Convert X to numpy float array (ensures no object dtype sneaks through)
+    X = X.astype(float).values
 
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
@@ -98,6 +122,8 @@ if uploaded_file:
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
+
+    st.info(f"🔍 Detected task type: **{task_type.upper()}**")
 
     # ================= MODELS =================
     if task_type == "regression":
@@ -120,36 +146,41 @@ if uploaded_file:
     results = {}
 
     for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        try:
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
 
-        if task_type == "regression":
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            r2 = r2_score(y_test, y_pred)
-            results[name] = {"RMSE": rmse, "R2": r2}
+            if task_type == "regression":
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                r2 = r2_score(y_test, y_pred)
+                results[name] = {"RMSE": rmse, "R2": r2}
 
-            st.markdown(f"### 🔹 {name}")
-            st.write(f"RMSE: {rmse:.3f}")
-            st.write(f"R² Score: {r2:.3f}")
+                st.markdown(f"### 🔹 {name}")
+                st.write(f"RMSE: {rmse:.3f}")
+                st.write(f"R² Score: {r2:.3f}")
 
-        else:
-            acc = accuracy_score(y_test, y_pred)
-            results[name] = {"Accuracy": acc}
+            else:
+                acc = accuracy_score(y_test, y_pred)
+                results[name] = {"Accuracy": acc}
 
-            st.markdown(f"### 🔹 {name}")
-            st.write(f"Accuracy: {acc:.3f}")
-            st.text(classification_report(y_test, y_pred))
+                st.markdown(f"### 🔹 {name}")
+                st.write(f"Accuracy: {acc:.3f}")
+                st.text(classification_report(y_test, y_pred))
 
-            fig, ax = plt.subplots()
-            sns.heatmap(
-                confusion_matrix(y_test, y_pred),
-                annot=True,
-                fmt="d",
-                cmap="Blues",
-                ax=ax
-            )
-            ax.set_title("Confusion Matrix")
-            st.pyplot(fig)
+                fig, ax = plt.subplots()
+                sns.heatmap(
+                    confusion_matrix(y_test, y_pred),
+                    annot=True,
+                    fmt="d",
+                    cmap="Blues",
+                    ax=ax
+                )
+                ax.set_title("Confusion Matrix")
+                st.pyplot(fig)
+                plt.close(fig)
+
+        except Exception as e:
+            st.error(f"❌ {name} failed to train: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -162,12 +193,15 @@ if uploaded_file:
         value = st.number_input(f"{col}", value=0.0)
         user_input.append(value)
 
-    user_input = scaler.transform([user_input])
+    user_input_array = scaler.transform([user_input])
 
     if st.button("Predict with All Models"):
         for name, model in models.items():
-            prediction = model.predict(user_input)
-            st.success(f"{name} Prediction: {prediction[0]}")
+            try:
+                prediction = model.predict(user_input_array)
+                st.success(f"{name} Prediction: {prediction[0]}")
+            except Exception as e:
+                st.error(f"❌ {name} prediction failed: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
