@@ -1,177 +1,176 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    mean_squared_error,
+    r2_score
+)
+
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# ================== PAGE CONFIG ==================
+# ================= PAGE CONFIG =================
 st.set_page_config(
-    page_title="Life Expectancy Analysis App",
-    page_icon="🌍",
+    page_title="Smart ML Trainer",
+    page_icon="🤖",
     layout="wide"
 )
 
-# ================== CUSTOM CSS ==================
+# ================= CUSTOM CSS =================
 st.markdown("""
 <style>
-body {
-    background-color: #f5f7fa;
-}
-.metric-box {
-    background: white;
-    padding: 20px;
-    border-radius: 14px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-    text-align: center;
-}
 .section {
     background: white;
     padding: 25px;
-    border-radius: 14px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    border-radius: 16px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
     margin-bottom: 25px;
+}
+.metric {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 14px;
+    text-align: center;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ================== SIDEBAR ==================
-st.sidebar.title("🌍 Life Expectancy App")
+# ================= SIDEBAR =================
+st.sidebar.title("🤖 Smart ML App")
+uploaded_file = st.sidebar.file_uploader("Upload Dataset (CSV)", type=["csv"])
 
-page = st.sidebar.radio(
-    "Navigation",
-    ["📊 Dashboard", "📄 Dataset", "📈 Visualizations"]
-)
-
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Life Expectancy CSV",
-    type=["csv"]
-)
-
-# ================== LOAD DATA ==================
+# ================= LOAD DATA =================
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
-
-    # CLEAN COLUMN NAMES (VERY IMPORTANT)
     df.columns = (
         df.columns
         .str.strip()
         .str.lower()
         .str.replace(" ", "_")
     )
-
     return df
 
-# ================== MAIN APP ==================
+# ================= MAIN =================
 if uploaded_file:
     df = load_data(uploaded_file)
 
-    # Detect numeric columns safely
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    st.title("🤖 Automated Machine Learning Dashboard")
 
-    # ================= DASHBOARD =================
-    if page == "📊 Dashboard":
-        st.title("📊 Life Expectancy Dashboard")
-        st.caption("Interactive overview of life expectancy data")
+    # ================= DATA OVERVIEW =================
+    with st.container():
+        st.markdown("<div class='section'>", unsafe_allow_html=True)
+        st.subheader("📂 Dataset Overview")
+        st.write("Shape:", df.shape)
+        st.dataframe(df.head())
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # SAFETY CHECK
-        if "life_expectancy" not in df.columns:
-            st.error("❌ Column 'Life Expectancy' not found in dataset.")
-            st.write("Available columns:", df.columns.tolist())
+    # ================= TARGET SELECTION =================
+    target = st.selectbox("🎯 Select Target Column", df.columns)
+
+    # ================= PREPROCESS =================
+    X = df.drop(columns=[target])
+    y = df[target]
+
+    # Encode categorical features
+    for col in X.select_dtypes(include="object").columns:
+        X[col] = LabelEncoder().fit_transform(X[col].astype(str))
+
+    if y.dtype == "object":
+        task_type = "classification"
+        y = LabelEncoder().fit_transform(y.astype(str))
+    else:
+        task_type = "regression"
+
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    # ================= MODELS =================
+    if task_type == "regression":
+        models = {
+            "Linear Regression": LinearRegression(),
+            "Random Forest Regressor": RandomForestRegressor(),
+            "Decision Tree Regressor": DecisionTreeRegressor()
+        }
+    else:
+        models = {
+            "Logistic Regression": LogisticRegression(max_iter=1000),
+            "Random Forest Classifier": RandomForestClassifier(),
+            "Decision Tree Classifier": DecisionTreeClassifier()
+        }
+
+    # ================= TRAIN =================
+    st.markdown("<div class='section'>", unsafe_allow_html=True)
+    st.subheader("⚙️ Model Training Results")
+
+    results = {}
+
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        if task_type == "regression":
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            r2 = r2_score(y_test, y_pred)
+            results[name] = {"RMSE": rmse, "R2": r2}
+
+            st.markdown(f"### 🔹 {name}")
+            st.write(f"RMSE: {rmse:.3f}")
+            st.write(f"R² Score: {r2:.3f}")
+
         else:
-            col1, col2, col3 = st.columns(3)
+            acc = accuracy_score(y_test, y_pred)
+            results[name] = {"Accuracy": acc}
 
-            with col1:
-                st.markdown(
-                    f"""
-                    <div class='metric-box'>
-                        <h3>📈 Avg Life Expectancy</h3>
-                        <h2>{df['life_expectancy'].mean():.2f}</h2>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            with col2:
-                if "country" in df.columns:
-                    countries = df["country"].nunique()
-                else:
-                    countries = "N/A"
-
-                st.markdown(
-                    f"""
-                    <div class='metric-box'>
-                        <h3>🌍 Countries</h3>
-                        <h2>{countries}</h2>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            with col3:
-                if "year" in df.columns:
-                    years = df["year"].nunique()
-                else:
-                    years = "N/A"
-
-                st.markdown(
-                    f"""
-                    <div class='metric-box'>
-                        <h3>📅 Years Covered</h3>
-                        <h2>{years}</h2>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            st.markdown("### 📌 Life Expectancy Distribution")
+            st.markdown(f"### 🔹 {name}")
+            st.write(f"Accuracy: {acc:.3f}")
+            st.text(classification_report(y_test, y_pred))
 
             fig, ax = plt.subplots()
-            sns.histplot(df["life_expectancy"].dropna(), kde=True, ax=ax)
-            ax.set_xlabel("Life Expectancy")
-            ax.set_ylabel("Frequency")
+            sns.heatmap(
+                confusion_matrix(y_test, y_pred),
+                annot=True,
+                fmt="d",
+                cmap="Blues",
+                ax=ax
+            )
+            ax.set_title("Confusion Matrix")
             st.pyplot(fig)
 
-    # ================= DATASET =================
-    elif page == "📄 Dataset":
-        st.title("📄 Dataset Overview")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div class='section'>", unsafe_allow_html=True)
-        st.subheader("Preview")
-        st.dataframe(df.head(30))
-        st.markdown("</div>", unsafe_allow_html=True)
+    # ================= PREDICTION =================
+    st.markdown("<div class='section'>", unsafe_allow_html=True)
+    st.subheader("🔮 Make Prediction")
 
-        st.markdown("<div class='section'>", unsafe_allow_html=True)
-        st.subheader("Missing Values")
-        missing = df.isnull().sum()
-        st.dataframe(missing)
-        st.markdown("</div>", unsafe_allow_html=True)
+    user_input = []
+    for col in df.drop(columns=[target]).columns:
+        value = st.number_input(f"{col}", value=0.0)
+        user_input.append(value)
 
-        st.markdown("<div class='section'>", unsafe_allow_html=True)
-        st.subheader("Descriptive Statistics")
-        st.dataframe(df.describe())
-        st.markdown("</div>", unsafe_allow_html=True)
+    user_input = scaler.transform([user_input])
 
-    # ================= VISUALIZATIONS =================
-    elif page == "📈 Visualizations":
-        st.title("📈 Interactive Visualizations")
+    if st.button("Predict with All Models"):
+        for name, model in models.items():
+            prediction = model.predict(user_input)
+            st.success(f"{name} Prediction: {prediction[0]}")
 
-        if len(numeric_cols) < 2:
-            st.warning("Not enough numeric columns for visualization.")
-        else:
-            st.markdown("<div class='section'>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-            x_axis = st.selectbox("X-axis", numeric_cols)
-            y_axis = st.selectbox("Y-axis", numeric_cols, index=1)
-
-            fig, ax = plt.subplots()
-            sns.scatterplot(data=df, x=x_axis, y=y_axis)
-            ax.set_title(f"{y_axis} vs {x_axis}")
-            st.pyplot(fig)
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-# ================== EMPTY STATE ==================
 else:
-    st.title("🌍 Life Expectancy Analysis App")
-    st.info("👈 Upload a CSV file from the sidebar to get started.")
+    st.title("🤖 Smart ML Training App")
+    st.info("Upload a CSV dataset to begin.")
