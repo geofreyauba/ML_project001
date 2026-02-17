@@ -29,182 +29,311 @@ st.set_page_config(
 # ================= CUSTOM CSS =================
 st.markdown("""
 <style>
-.section {
-    background: white;
-    padding: 25px;
-    border-radius: 16px;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
-    margin-bottom: 25px;
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
 }
-.metric {
-    background: #f8f9fa;
-    padding: 20px;
+
+h1, h2, h3 { font-family: 'Space Mono', monospace; }
+
+.section {
+    background: #1a1a24;
+    border: 1px solid #2e2e42;
+    padding: 28px;
     border-radius: 14px;
+    margin-bottom: 24px;
+}
+
+.task-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 10px;
+}
+
+.badge-regression {
+    background: #1e3a5f;
+    color: #60aaff;
+    border: 1px solid #2d5a9e;
+}
+
+.badge-classification {
+    background: #1e3d2f;
+    color: #4ddd8e;
+    border: 1px solid #2d7a50;
+}
+
+.metric-box {
+    background: #12121a;
+    border: 1px solid #2e2e42;
+    border-radius: 10px;
+    padding: 18px;
     text-align: center;
+    margin: 6px 0;
+}
+
+.metric-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #888;
+    margin-bottom: 6px;
+}
+
+.metric-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    color: #f0f0f0;
+}
+
+.model-header {
+    font-family: 'Space Mono', monospace;
+    font-size: 15px;
+    color: #a0a0c0;
+    padding: 10px 0 4px 0;
+    border-bottom: 1px solid #2e2e42;
+    margin-bottom: 14px;
+}
+
+.prediction-result {
+    background: #12121a;
+    border: 1px solid #4f46e5;
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin: 8px 0;
+    font-family: 'Space Mono', monospace;
+    color: #a0c4ff;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ================= SIDEBAR =================
-st.sidebar.title("🤖 Smart ML App")
+st.sidebar.markdown("## 🤖 Smart ML App")
+st.sidebar.markdown("---")
 uploaded_file = st.sidebar.file_uploader("Upload Dataset (CSV)", type=["csv"])
+st.sidebar.markdown("---")
+st.sidebar.markdown("**How it works**")
+st.sidebar.markdown("""
+1. Upload your CSV  
+2. Select your single target column  
+3. App trains **3 Regression** + **3 Classification** models  
+4. Compare metrics and make predictions  
+""")
 
-# ================= LOAD DATA =================
+# ================= HELPERS =================
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
-    df.columns = (
-        df.columns
-        .str.strip()
-        .str.lower()
-        .str.replace(" ", "_")
-    )
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
     return df
+
+def clean_features(X_raw):
+    X = X_raw.copy()
+    for col in X.select_dtypes(include="object").columns:
+        X[col] = LabelEncoder().fit_transform(X[col].astype(str))
+    X = X.replace([np.inf, -np.inf], np.nan)
+    X = X.fillna(X.median(numeric_only=True))
+    return X.astype(float)
+
+def run_regression(X_train, X_test, y_train, y_test):
+    models = {
+        "Linear Regression": LinearRegression(),
+        "Random Forest Regressor": RandomForestRegressor(n_estimators=100, random_state=42),
+        "Decision Tree Regressor": DecisionTreeRegressor(random_state=42),
+    }
+    results, trained = {}, {}
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        results[name] = {
+            "RMSE": round(np.sqrt(mean_squared_error(y_test, y_pred)), 4),
+            "R2": round(r2_score(y_test, y_pred), 4)
+        }
+        trained[name] = model
+    return results, trained
+
+def run_classification(X_train, X_test, y_train, y_test):
+    models = {
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+        "Random Forest Classifier": RandomForestClassifier(n_estimators=100, random_state=42),
+        "Decision Tree Classifier": DecisionTreeClassifier(random_state=42),
+    }
+    results, trained, reports, cms = {}, {}, {}, {}
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        results[name] = {"Accuracy": round(accuracy_score(y_test, y_pred), 4)}
+        trained[name] = model
+        reports[name] = classification_report(y_test, y_pred)
+        cms[name] = confusion_matrix(y_test, y_pred)
+    return results, trained, reports, cms
 
 # ================= MAIN =================
 if uploaded_file:
     df = load_data(uploaded_file)
 
-    st.title("🤖 Automated Machine Learning Dashboard")
+    st.markdown("# 🤖 Smart ML Training Dashboard")
+    st.markdown("Trains **Regression** and **Classification** models simultaneously on your chosen target column.")
 
-    # ================= DATA OVERVIEW =================
-    with st.container():
-        st.markdown("<div class='section'>", unsafe_allow_html=True)
-        st.subheader("📂 Dataset Overview")
-        st.write("Shape:", df.shape)
-        st.dataframe(df.head())
+    # ---- Dataset Overview ----
+    with st.expander("📂 Dataset Overview", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Rows", df.shape[0])
+        c2.metric("Columns", df.shape[1])
+        c3.metric("Missing Values", int(df.isnull().sum().sum()))
+        st.dataframe(df.head(8), use_container_width=True)
 
-        # Show missing value warning if any
-        missing = df.isnull().sum().sum()
-        if missing > 0:
-            st.warning(f"⚠️ Dataset contains {missing} missing value(s). They will be handled automatically.")
+    st.markdown("---")
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ================= TARGET SELECTION =================
+    # ---- Target Selection ----
     target = st.selectbox("🎯 Select Target Column", df.columns)
 
-    # ================= PREPROCESS =================
-    X = df.drop(columns=[target])
-    y = df[target]
+    # ---- Preprocess features ----
+    X_raw = df.drop(columns=[target])
+    y_raw = df[target]
+    feature_cols = X_raw.columns.tolist()
 
-    # --- FIX 1: Encode categorical features ---
-    for col in X.select_dtypes(include="object").columns:
-        X[col] = LabelEncoder().fit_transform(X[col].astype(str))
+    X = clean_features(X_raw)
 
-    # --- FIX 2: Fill missing values BEFORE scaling ---
-    # Numeric columns: fill with median
-    for col in X.select_dtypes(include=[np.number]).columns:
-        X[col] = X[col].fillna(X[col].median())
+    # ---- Regression target: always numeric ----
+    y_reg = pd.to_numeric(y_raw, errors="coerce")
+    y_reg = y_reg.fillna(y_reg.median())
 
-    # --- FIX 3: Replace any remaining inf/-inf with NaN then fill ---
-    X = X.replace([np.inf, -np.inf], np.nan)
-    X = X.fillna(X.median(numeric_only=True))
+    # ---- Classification target: encode labels ----
+    le = LabelEncoder()
+    y_cls = le.fit_transform(y_raw.astype(str))
+    cls_labels = le.classes_
 
-    # --- Handle target column ---
-    if y.dtype == "object":
-        task_type = "classification"
-        y = LabelEncoder().fit_transform(y.astype(str))
-    else:
-        # Fill missing target values with median
-        y = pd.to_numeric(y, errors="coerce")
-        y = y.fillna(y.median())
-
-        unique_vals = y.nunique()
-        task_type = "classification" if unique_vals <= 10 else "regression"
-
-    # Convert X to numpy float array (ensures no object dtype sneaks through)
-    X = X.astype(float).values
-
+    # ---- Scale and Split ----
     scaler = StandardScaler()
-    X = scaler.fit_transform(X)
+    X_scaled = scaler.fit_transform(X)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    X_train, X_test, yr_train, yr_test = train_test_split(
+        X_scaled, y_reg, test_size=0.2, random_state=42
+    )
+    _, _, yc_train, yc_test = train_test_split(
+        X_scaled, y_cls, test_size=0.2, random_state=42
     )
 
-    st.info(f"🔍 Detected task type: **{task_type.upper()}**")
+    # ---- Train and Display ----
+    st.markdown("## ⚙️ Model Training Results")
+    tab_reg, tab_cls = st.tabs(["📈 Regression Models", "🔵 Classification Models"])
 
-    # ================= MODELS =================
-    if task_type == "regression":
-        models = {
-            "Linear Regression": LinearRegression(),
-            "Random Forest Regressor": RandomForestRegressor(),
-            "Decision Tree Regressor": DecisionTreeRegressor()
-        }
-    else:
-        models = {
-            "Logistic Regression": LogisticRegression(max_iter=1000),
-            "Random Forest Classifier": RandomForestClassifier(),
-            "Decision Tree Classifier": DecisionTreeClassifier()
-        }
-
-    # ================= TRAIN =================
-    st.markdown("<div class='section'>", unsafe_allow_html=True)
-    st.subheader("⚙️ Model Training Results")
-
-    results = {}
-
-    for name, model in models.items():
+    # --- Regression Tab ---
+    with tab_reg:
+        st.markdown("<div class='task-badge badge-regression'>REGRESSION TASK</div>", unsafe_allow_html=True)
         try:
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
-
-            if task_type == "regression":
-                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-                r2 = r2_score(y_test, y_pred)
-                results[name] = {"RMSE": rmse, "R2": r2}
-
-                st.markdown(f"### 🔹 {name}")
-                st.write(f"RMSE: {rmse:.3f}")
-                st.write(f"R² Score: {r2:.3f}")
-
-            else:
-                acc = accuracy_score(y_test, y_pred)
-                results[name] = {"Accuracy": acc}
-
-                st.markdown(f"### 🔹 {name}")
-                st.write(f"Accuracy: {acc:.3f}")
-                st.text(classification_report(y_test, y_pred))
-
-                fig, ax = plt.subplots()
-                sns.heatmap(
-                    confusion_matrix(y_test, y_pred),
-                    annot=True,
-                    fmt="d",
-                    cmap="Blues",
-                    ax=ax
-                )
-                ax.set_title("Confusion Matrix")
-                st.pyplot(fig)
-                plt.close(fig)
-
+            reg_results, reg_trained = run_regression(X_train, X_test, yr_train, yr_test)
+            for name, metrics in reg_results.items():
+                st.markdown(f"<div class='model-header'>▸ {name}</div>", unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"""
+                    <div class='metric-box'>
+                        <div class='metric-label'>RMSE</div>
+                        <div class='metric-value'>{metrics['RMSE']}</div>
+                    </div>""", unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"""
+                    <div class='metric-box'>
+                        <div class='metric-label'>R² Score</div>
+                        <div class='metric-value'>{metrics['R2']}</div>
+                    </div>""", unsafe_allow_html=True)
         except Exception as e:
-            st.error(f"❌ {name} failed to train: {e}")
+            st.error(f"Regression error: {e}")
+            reg_trained = {}
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    # --- Classification Tab ---
+    with tab_cls:
+        st.markdown("<div class='task-badge badge-classification'>CLASSIFICATION TASK</div>", unsafe_allow_html=True)
+        try:
+            cls_results, cls_trained, cls_reports, cls_cms = run_classification(
+                X_train, X_test, yc_train, yc_test
+            )
+            for name, metrics in cls_results.items():
+                st.markdown(f"<div class='model-header'>▸ {name}</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='metric-box'>
+                    <div class='metric-label'>Accuracy</div>
+                    <div class='metric-value'>{metrics['Accuracy']}</div>
+                </div>""", unsafe_allow_html=True)
 
-    # ================= PREDICTION =================
-    st.markdown("<div class='section'>", unsafe_allow_html=True)
-    st.subheader("🔮 Make Prediction")
+                with st.expander(f"📋 Report & Confusion Matrix — {name}"):
+                    st.text(cls_reports[name])
+                    fig, ax = plt.subplots(figsize=(5, 3))
+                    fig.patch.set_facecolor("#1a1a24")
+                    ax.set_facecolor("#12121a")
+                    sns.heatmap(
+                        cls_cms[name], annot=True, fmt="d", cmap="Blues",
+                        ax=ax, annot_kws={"color": "white"}
+                    )
+                    ax.set_title("Confusion Matrix", color="#a0a0c0", fontsize=11)
+                    ax.tick_params(colors="#888")
+                    st.pyplot(fig)
+                    plt.close(fig)
+        except Exception as e:
+            st.error(f"Classification error: {e}")
+            cls_trained = {}
 
-    user_input = []
-    for col in df.drop(columns=[target]).columns:
-        value = st.number_input(f"{col}", value=0.0)
-        user_input.append(value)
+    # ---- Prediction Section ----
+    st.markdown("---")
+    st.markdown("## 🔮 Make a Prediction")
+    st.markdown("Enter values for each feature and predict using all 6 trained models.")
 
-    user_input_array = scaler.transform([user_input])
+    with st.form("prediction_form"):
+        cols = st.columns(3)
+        user_input = []
+        for i, col in enumerate(feature_cols):
+            default_val = float(df[col].median()) if pd.api.types.is_numeric_dtype(df[col]) else 0.0
+            val = cols[i % 3].number_input(col, value=default_val)
+            user_input.append(val)
 
-    if st.button("Predict with All Models"):
-        for name, model in models.items():
-            try:
-                prediction = model.predict(user_input_array)
-                st.success(f"{name} Prediction: {prediction[0]}")
-            except Exception as e:
-                st.error(f"❌ {name} prediction failed: {e}")
+        submitted = st.form_submit_button("🚀 Predict with All Models")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    if submitted:
+        user_array = scaler.transform([user_input])
+        col_r, col_c = st.columns(2)
+
+        with col_r:
+            st.markdown("### 📈 Regression Predictions")
+            for name, model in reg_trained.items():
+                try:
+                    pred = model.predict(user_array)[0]
+                    st.markdown(f"""
+                    <div class='prediction-result'>
+                        <b>{name}</b><br>
+                        Predicted Value: <span style='color:#60aaff; font-size:18px'>{pred:.4f}</span>
+                    </div>""", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"{name}: {e}")
+
+        with col_c:
+            st.markdown("### 🔵 Classification Predictions")
+            for name, model in cls_trained.items():
+                try:
+                    pred = model.predict(user_array)[0]
+                    label = cls_labels[pred] if pred < len(cls_labels) else str(pred)
+                    st.markdown(f"""
+                    <div class='prediction-result'>
+                        <b>{name}</b><br>
+                        Predicted Class: <span style='color:#4ddd8e; font-size:18px'>{label}</span>
+                    </div>""", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"{name}: {e}")
 
 else:
-    st.title("🤖 Smart ML Training App")
-    st.info("Upload a CSV dataset to begin.")
+    st.markdown("# 🤖 Smart ML Training App")
+    st.info("👈 Upload a CSV dataset from the sidebar to get started.")
+    st.markdown("""
+    **What this app does:**
+    - You select **one target column**
+    - Automatically trains **3 Regression models** (Linear, Random Forest, Decision Tree) 
+    - Automatically trains **3 Classification models** (Logistic, Random Forest, Decision Tree)
+    - Shows full metrics, classification reports, and confusion matrices
+    - Lets you enter custom inputs to get predictions from all 6 models at once
+    """)
